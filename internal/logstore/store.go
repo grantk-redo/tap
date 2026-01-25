@@ -115,7 +115,7 @@ func (s *Store) AppendWithService(serviceName, stream, text string, timestamp ti
 	// Enforce max entries limit by removing oldest entry
 	if s.maxEntries > 0 && len(s.entries) >= s.maxEntries {
 		oldest := s.entries[0]
-		s.index.Delete(fmt.Sprintf("%d", oldest.ID))
+		_ = s.index.Delete(fmt.Sprintf("%d", oldest.ID))
 		s.entries = s.entries[1:]
 	}
 
@@ -143,7 +143,7 @@ func (s *Store) AppendWithService(serviceName, stream, text string, timestamp ti
 	s.entries = append(s.entries, entry)
 	s.nextID++
 
-	s.index.Index(fmt.Sprintf("%d", entry.ID), entry)
+	_ = s.index.Index(fmt.Sprintf("%d", entry.ID), entry)
 
 	// Notify subscribers (non-blocking)
 	for ch := range s.subscribers {
@@ -419,7 +419,7 @@ func (s *Store) Clear() {
 	defer s.mu.Unlock()
 
 	// Close old index and create new one
-	s.index.Close()
+	_ = s.index.Close()
 	s.index, _ = bleve.NewMemOnly(buildIndexMapping())
 	s.entries = make([]LogEntry, 0)
 	// Keep nextID incrementing for uniqueness

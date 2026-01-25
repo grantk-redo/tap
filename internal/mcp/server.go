@@ -59,7 +59,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -113,7 +113,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(sb.String()))
+	_, _ = w.Write([]byte(sb.String()))
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +135,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Send endpoint event per MCP spec
 	endpoint := fmt.Sprintf("http://%s/message?session_id=%s", r.Host, sessionID)
-	fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpoint)
+	_, _ = fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", endpoint)
 	flusher.Flush()
 
 	// Keep connection alive
@@ -822,7 +822,7 @@ func writeResult(w http.ResponseWriter, id any, result any) {
 		Result:  result,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func writeError(w http.ResponseWriter, id any, code int, message string) {
@@ -835,5 +835,5 @@ func writeError(w http.ResponseWriter, id any, code int, message string) {
 		},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

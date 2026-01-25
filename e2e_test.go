@@ -23,7 +23,7 @@ func getFreePort(t *testing.T) int {
 		t.Fatalf("failed to get free port: %v", err)
 	}
 	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
+	_ = l.Close()
 	return port
 }
 
@@ -43,7 +43,7 @@ func postMCP(t *testing.T, url string, method string, params any) map[string]any
 	if err != nil {
 		t.Fatalf("POST %s failed: %v", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -76,7 +76,7 @@ func TestE2EFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Start MCP server
 	mcpServer := mcp.NewServer(store)
@@ -85,14 +85,14 @@ func TestE2EFullFlow(t *testing.T) {
 		Handler: mcpServer,
 	}
 
-	go httpServer.ListenAndServe()
-	defer httpServer.Shutdown(context.Background())
+	go func() { _ = httpServer.ListenAndServe() }()
+	defer func() { _ = httpServer.Shutdown(context.Background()) }()
 
 	// Wait for server to be ready
 	for i := 0; i < 50; i++ {
 		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -278,7 +278,7 @@ func TestE2ESSEConnection(t *testing.T) {
 	sseURL := fmt.Sprintf("http://127.0.0.1:%d/sse", port)
 
 	store, _ := logstore.New(nil, 0)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	mcpServer := mcp.NewServer(store)
 	httpServer := &http.Server{
@@ -286,8 +286,8 @@ func TestE2ESSEConnection(t *testing.T) {
 		Handler: mcpServer,
 	}
 
-	go httpServer.ListenAndServe()
-	defer httpServer.Shutdown(context.Background())
+	go func() { _ = httpServer.ListenAndServe() }()
+	defer func() { _ = httpServer.Shutdown(context.Background()) }()
 
 	// Wait for server
 	time.Sleep(50 * time.Millisecond)
@@ -301,7 +301,7 @@ func TestE2ESSEConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SSE connection failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.Header.Get("Content-Type") != "text/event-stream" {
 		t.Errorf("Content-Type = %q, want text/event-stream", resp.Header.Get("Content-Type"))
@@ -325,7 +325,7 @@ func TestE2ELongRunningProcess(t *testing.T) {
 	messageURL := fmt.Sprintf("http://127.0.0.1:%d/message", port)
 
 	store, _ := logstore.New(nil, 0)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	mcpServer := mcp.NewServer(store)
 	httpServer := &http.Server{
@@ -333,8 +333,8 @@ func TestE2ELongRunningProcess(t *testing.T) {
 		Handler: mcpServer,
 	}
 
-	go httpServer.ListenAndServe()
-	defer httpServer.Shutdown(context.Background())
+	go func() { _ = httpServer.ListenAndServe() }()
+	defer func() { _ = httpServer.Shutdown(context.Background()) }()
 
 	// Wait for server
 	time.Sleep(50 * time.Millisecond)
@@ -353,7 +353,7 @@ func TestE2ELongRunningProcess(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	proc.Start(ctx)
+	_ = proc.Start(ctx)
 
 	// Check logs while process is running
 	time.Sleep(150 * time.Millisecond)

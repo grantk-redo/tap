@@ -9,7 +9,7 @@ import (
 
 func TestExtractLevel(t *testing.T) {
 	store, _ := New(nil, 0)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	tests := []struct {
 		name  string
@@ -98,7 +98,7 @@ func TestExtractMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store, _ := New(tt.pattern, 0)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 			structured := parseStructured(tt.input)
 			patternMatches := store.extractFromPattern(tt.input)
 			got := store.extractMessage(tt.input, structured, patternMatches)
@@ -114,7 +114,7 @@ func TestStoreAppendAndTail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "INFO: line 1", now)
@@ -152,7 +152,7 @@ func TestServiceExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "[api] starting server", now)
@@ -183,7 +183,7 @@ func TestLogPatternFullExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "[api] INFO: server starting on port 8080", now)
@@ -236,7 +236,7 @@ func TestClear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	store.Append("stdout", "line 1", time.Now())
 	store.Append("stdout", "line 2", time.Now())
@@ -257,7 +257,7 @@ func TestFilterSince(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	oldTime := now.Add(-10 * time.Minute)
@@ -295,7 +295,7 @@ func TestFilterSinceCombined(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	oldTime := now.Add(-10 * time.Minute)
@@ -325,7 +325,7 @@ func TestFilterUntil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	oldTime := now.Add(-10 * time.Minute)
@@ -364,7 +364,7 @@ func TestFilterSinceAndUntil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "very old log", now.Add(-2*time.Hour))
@@ -498,7 +498,7 @@ func TestMaxEntries(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for i := 1; i <= tt.appendCount; i++ {
@@ -526,7 +526,7 @@ func TestMaxEntriesRemovesFromIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "searchable first", now)
@@ -671,7 +671,7 @@ func TestStats(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			baseTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 			for _, log := range tt.logs {
@@ -738,7 +738,7 @@ func TestStatsTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	earliest := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	middle := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
@@ -858,7 +858,7 @@ func TestGetContext(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for i := 1; i <= tt.logCount; i++ {
@@ -888,7 +888,7 @@ func TestGetContextEmptyStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	result := store.GetContext(1, 2, 2)
 	if result != nil {
@@ -901,7 +901,7 @@ func TestGetContextAfterEviction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	// Add 5 entries to a store with max 3, so entries 1 and 2 are evicted
@@ -988,7 +988,7 @@ func TestAppendWithService(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			store.AppendWithService(tt.serviceName, tt.stream, tt.text, now)
@@ -1017,7 +1017,7 @@ func TestAppendWithServiceFilterByService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	// Simulate multiple processes with explicit service names
@@ -1089,7 +1089,7 @@ func TestSubscribe(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			ch := make(chan LogEntry, tt.channelBufSize)
 			unsubscribe := store.Subscribe(ch)
@@ -1125,7 +1125,7 @@ func TestSubscribeUnsubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ch := make(chan LogEntry, 10)
 	unsubscribe := store.Subscribe(ch)
@@ -1163,7 +1163,7 @@ func TestSubscribeMultipleSubscribers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ch1 := make(chan LogEntry, 10)
 	ch2 := make(chan LogEntry, 10)
@@ -1247,7 +1247,7 @@ func TestGetByID(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for i := 1; i <= tt.logCount; i++ {
@@ -1281,7 +1281,7 @@ func TestGetByIDAfterEviction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	// Add 5 entries to a store with max 3, so entries 1 and 2 are evicted
@@ -1323,7 +1323,7 @@ func TestSubscribeEntryContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	ch := make(chan LogEntry, 10)
 	unsubscribe := store.Subscribe(ch)

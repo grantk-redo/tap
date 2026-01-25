@@ -92,7 +92,7 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	go func() {
 		wg.Wait()
-		r.cmd.Wait()
+		_ = r.cmd.Wait()
 		r.mu.Lock()
 		if r.cmd.ProcessState != nil {
 			r.exitCode = r.cmd.ProcessState.ExitCode()

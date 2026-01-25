@@ -52,7 +52,7 @@ func getToolResultText(t *testing.T, resp JSONRPCResponse) string {
 
 func TestInitialize(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -84,7 +84,7 @@ func TestInitialize(t *testing.T) {
 
 func TestToolsList(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -126,7 +126,7 @@ func TestToolsList(t *testing.T) {
 
 func TestTailLogs(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "INFO: line 1", now)
@@ -213,7 +213,7 @@ func TestTailLogs(t *testing.T) {
 func TestTailLogsWithService(t *testing.T) {
 	re := regexp.MustCompile(`\[(?P<service>\w+)\]`)
 	server, store := newTestServer(t, re)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "[api] request received", now)
@@ -253,7 +253,7 @@ func TestTailLogsWithService(t *testing.T) {
 
 func TestSearchLogs(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "database connection failed", now)
@@ -292,7 +292,7 @@ func TestSearchLogs(t *testing.T) {
 
 func TestSearchLogsRequiresQuery(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -315,7 +315,7 @@ func TestSearchLogsRequiresQuery(t *testing.T) {
 func TestListServices(t *testing.T) {
 	re := regexp.MustCompile(`\[(?P<service>\w+)\]`)
 	server, store := newTestServer(t, re)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "[api] starting", now)
@@ -349,7 +349,7 @@ func TestListServices(t *testing.T) {
 
 func TestListServicesEmpty(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -376,7 +376,7 @@ func TestListServicesEmpty(t *testing.T) {
 
 func TestClearLogs(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "line 1", now)
@@ -411,7 +411,7 @@ func TestClearLogs(t *testing.T) {
 
 func TestUnknownMethod(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -429,7 +429,7 @@ func TestUnknownMethod(t *testing.T) {
 
 func TestUnknownTool(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -451,7 +451,7 @@ func TestUnknownTool(t *testing.T) {
 
 func TestSSEEndpoint(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
 	rec := httptest.NewRecorder()
@@ -473,7 +473,7 @@ func TestSSEEndpoint(t *testing.T) {
 
 func TestMethodNotAllowed(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	req := httptest.NewRequest(http.MethodGet, "/message", nil)
 	rec := httptest.NewRecorder()
@@ -486,14 +486,14 @@ func TestMethodNotAllowed(t *testing.T) {
 
 func TestParseError(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	req := httptest.NewRequest(http.MethodPost, "/message", bytes.NewReader([]byte("not json")))
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
 
 	var resp JSONRPCResponse
-	json.NewDecoder(rec.Body).Decode(&resp)
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
 
 	if resp.Error == nil {
 		t.Fatal("expected parse error")
@@ -535,7 +535,7 @@ func TestParseDuration(t *testing.T) {
 
 func TestTailLogsWithSince(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	oldTime := now.Add(-10 * time.Minute)
@@ -570,7 +570,7 @@ func TestTailLogsWithSince(t *testing.T) {
 
 func TestTailLogsWithUntil(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	oldTime := now.Add(-10 * time.Minute)
@@ -649,7 +649,7 @@ func TestTailLogsWithSinceAndUntil(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, nil)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			store.Append("stdout", "very old log", now.Add(-2*time.Hour))
@@ -769,7 +769,7 @@ func TestLogStats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, tt.serviceRegex)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for _, log := range tt.logs {
@@ -809,7 +809,7 @@ func TestLogStats(t *testing.T) {
 
 func TestLogStatsTimestamps(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	earliest := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 	latest := time.Date(2024, 1, 15, 11, 45, 30, 0, time.UTC)
@@ -995,7 +995,7 @@ func TestSearchLogsWithContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, nil)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for _, log := range tt.logs {
@@ -1100,7 +1100,7 @@ func TestHealthEndpoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, tt.serviceRegex)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for _, log := range tt.logs {
@@ -1244,7 +1244,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, tt.serviceRegex)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for _, log := range tt.logs {
@@ -1333,7 +1333,7 @@ func TestSearchLogsContextEdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, nil)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for _, log := range tt.logs {
@@ -1370,7 +1370,7 @@ func TestSearchLogsContextEdgeCases(t *testing.T) {
 
 func TestWatchLogsToolListed(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -1408,7 +1408,7 @@ func TestWatchLogsToolListed(t *testing.T) {
 
 func TestWatchLogsTimeout(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	start := time.Now()
 
@@ -1444,7 +1444,7 @@ func TestWatchLogsTimeout(t *testing.T) {
 
 func TestWatchLogsReceivesLogs(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Start watch_logs in a goroutine
 	done := make(chan JSONRPCResponse, 1)
@@ -1621,7 +1621,7 @@ func TestWatchLogsWithFilters(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, tt.serviceRegex)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			// Start watch_logs in a goroutine
 			done := make(chan JSONRPCResponse, 1)
@@ -1680,7 +1680,7 @@ func TestWatchLogsWithFilters(t *testing.T) {
 
 func TestGetLogToolListed(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	resp := postJSON(t, server, JSONRPCRequest{
 		JSONRPC: "2.0",
@@ -1859,7 +1859,7 @@ func TestGetLog(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server, store := newTestServer(t, nil)
-			defer store.Close()
+			defer func() { _ = store.Close() }()
 
 			now := time.Now()
 			for _, log := range tt.logs {
@@ -1910,7 +1910,7 @@ func TestGetLog(t *testing.T) {
 func TestGetLogWithService(t *testing.T) {
 	re := regexp.MustCompile(`\[(?P<service>\w+)\]`)
 	server, store := newTestServer(t, re)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	store.Append("stdout", "[api] request received", now)
@@ -1957,7 +1957,7 @@ func TestGetLogWithService(t *testing.T) {
 
 func TestWatchLogsDefaultTimeout(t *testing.T) {
 	server, store := newTestServer(t, nil)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Start watch_logs with no timeout specified - should use default 30s
 	// We'll send a log immediately and verify it's received

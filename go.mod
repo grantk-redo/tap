@@ -2,7 +2,10 @@ module github.com/pjtatlow/tap
 
 go 1.25.3
 
-require github.com/blevesearch/bleve/v2 v2.5.7
+require (
+	github.com/blevesearch/bleve/v2 v2.5.7
+	github.com/spf13/cobra v1.10.2
+)
 
 require (
 	github.com/RoaringBitmap/roaring/v2 v2.4.5 // indirect
@@ -28,7 +31,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/json-iterator/go v0.0.0-20171115153421-f7279a603ede // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
-	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	go.etcd.io/bbolt v1.4.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect

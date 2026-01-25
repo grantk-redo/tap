@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runs-on: ubuntu-latest
+          - goos: linux
+            goarch: arm64
+            runs-on: ubuntu-latest
+          - goos: darwin
+            goarch: amd64
+            runs-on: macos-15-intel
+          - goos: darwin
+            goarch: arm64
+            runs-on: macos-latest
+          - goos: windows
+            goarch: amd64
+            runs-on: ubuntu-latest
+          - goos: windows
+            goarch: arm64
+            runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.goos == 'darwin' && '1' || '0' }}
+        run: |
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+          fi
+          go build -v -ldflags="-s -w" -o "tap${EXT}" ./cmd/tap
+
+          # Determine sha256 command based on runner OS
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            SHA256="shasum -a 256"
+          else
+            SHA256="sha256sum"
+          fi
+
+          # Create archive
+          ARCHIVE_NAME="tap-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${ARCHIVE_NAME}.zip" "tap${EXT}"
+            $SHA256 "${ARCHIVE_NAME}.zip" > "${ARCHIVE_NAME}.zip.sha256"
+          else
+            tar czf "${ARCHIVE_NAME}.tar.gz" "tap${EXT}"
+            $SHA256 "${ARCHIVE_NAME}.tar.gz" > "${ARCHIVE_NAME}.tar.gz.sha256"
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tap-${{ matrix.goos }}-${{ matrix.goarch }}.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
