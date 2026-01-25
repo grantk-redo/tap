@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build
-go build -o tap ./cmd/tap
+go build -o tap .
 
 # Run all tests
 go test ./...
@@ -33,7 +33,7 @@ Process   Bleve Index
 
 ### Key Packages
 
-- **cmd/tap** - CLI entry point using Cobra. Handles command mode, stdin mode, and `run` subcommand for multiple processes.
+- **root package (main.go)** - CLI entry point using Cobra. Handles command mode, stdin mode, and `run` subcommand for multiple processes.
 - **internal/runner** - Spawns processes, captures stdout/stderr via pipes, emits `LogLine` events to handlers.
 - **internal/logstore** - In-memory log storage with Bleve full-text search. Parses logs to extract service, level, and message using pattern matching, JSON field detection, or text patterns.
 - **internal/mcp** - HTTP server implementing MCP protocol (JSON-RPC 2.0 over SSE). Exposes tools: `list_services`, `tail_logs`, `search_logs`, `clear_logs`, `log_stats`, `watch_logs`, `get_log`.

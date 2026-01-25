@@ -33,10 +33,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) setupRoutes() {
+	// Streamable HTTP transport (newer) - POST to root
+	s.mux.HandleFunc("/", s.handleStreamableHTTP)
+	// SSE transport (older) - connect to /sse, POST to /message
 	s.mux.HandleFunc("/sse", s.handleSSE)
 	s.mux.HandleFunc("/message", s.handleMessage)
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/metrics", s.handleMetrics)
+	s.mux.HandleFunc("/logs", s.handleLogs)
 }
 
 type HealthResponse struct {
@@ -114,6 +118,89 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(sb.String()))
+}
+
+// handleLogs returns recent logs as plain text or JSON.
+// Query params: lines (default 100), service, level, stream, format (text|json)
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	// Parse lines param
+	lines := 100
+	if n := q.Get("lines"); n != "" {
+		if parsed, err := strconv.Atoi(n); err == nil && parsed > 0 {
+			lines = parsed
+		}
+	}
+
+	// Build filter options
+	opts := logstore.FilterOptions{}
+	if st := q.Get("stream"); st != "" {
+		opts.Stream = st
+	}
+	if svc := q.Get("service"); svc != "" {
+		opts.Service = svc
+	}
+	if lvl := q.Get("level"); lvl != "" {
+		opts.Level = logstore.LogLevel(lvl)
+	}
+	if since := q.Get("since"); since != "" {
+		if d, err := parseDuration(since); err == nil {
+			opts.Since = time.Now().Add(-d)
+		}
+	}
+
+	entries := s.store.Tail(lines, opts)
+
+	// Output format
+	format := q.Get("format")
+	if format == "json" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(entries)
+		return
+	}
+
+	// Default: plain text
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if len(entries) == 0 {
+		_, _ = w.Write([]byte("No log entries\n"))
+		return
+	}
+	for _, e := range entries {
+		line := formatEntry(e)
+		_, _ = w.Write([]byte(line + "\n"))
+	}
+}
+
+// handleStreamableHTTP implements the MCP Streamable HTTP transport.
+// This is the newer transport where clients POST JSON-RPC directly to /.
+func (s *Server) handleStreamableHTTP(w http.ResponseWriter, r *http.Request) {
+	// Only handle POST requests - other methods get 404
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+
+	// Handle JSON-RPC request same as /message
+	var req JSONRPCRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, nil, -32700, "Parse error")
+		return
+	}
+
+	switch req.Method {
+	case "initialize":
+		s.handleInitialize(w, &req)
+	case "initialized":
+		// Client notification that initialization is complete - just acknowledge
+		writeResult(w, req.ID, map[string]any{})
+	case "tools/list":
+		s.handleToolsList(w, &req)
+	case "tools/call":
+		s.handleToolsCall(w, &req)
+	default:
+		writeError(w, req.ID, -32601, "Method not found")
+	}
 }
 
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +325,14 @@ func (s *Server) handleToolsList(w http.ResponseWriter, req *JSONRPCRequest) {
 					"limit": map[string]any{
 						"type":        "integer",
 						"description": "Maximum results to return (default: 100)",
+					},
+					"since": map[string]any{
+						"type":        "string",
+						"description": "Only search logs from this duration ago. Examples: '30s', '5m', '1h'",
+					},
+					"until": map[string]any{
+						"type":        "string",
+						"description": "Only search logs until this duration ago. Examples: '30s', '5m', '1h'. Can be combined with 'since' for a time window.",
 					},
 					"stream": map[string]any{
 						"type":        "string",

@@ -247,11 +247,16 @@ func runMain(cmd *cobra.Command, args []string) {
 }
 
 func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []string, store *logstore.Store, httpServer *http.Server, sigCh chan os.Signal) {
+	// Signal handling state - outside loop so it persists across restarts
+	sigCount := 0
+	var lastSignalTime time.Time
+
 	for {
 		// Create a new context for each subprocess iteration
 		procCtx, procCancel := context.WithCancel(ctx)
 
 		proc := runner.New(args[0], args[1:]...)
+		proc.ForwardOutput(true) // Forward subprocess output to terminal
 		proc.OnLine(func(line runner.LogLine) {
 			store.Append(string(line.Stream), line.Text, line.Timestamp)
 		})
@@ -261,8 +266,6 @@ func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []strin
 			log.Fatalf("failed to start process: %v", err)
 		}
 
-		// Signal handling state
-		sigCount := 0
 		restartPending := false
 		exitPending := false
 
@@ -271,17 +274,25 @@ func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []strin
 		for {
 			select {
 			case <-sigCh:
+				now := time.Now()
+				// Reset signal count if more than 2 seconds since last signal
+				if now.Sub(lastSignalTime) > 2*time.Second {
+					sigCount = 0
+				}
+				lastSignalTime = now
 				sigCount++
+
 				switch sigCount {
 				case 1:
 					log.Println("Restarting... (Ctrl+C again to exit, third time to force kill)")
 					restartPending = true
 					_ = proc.Signal(syscall.SIGINT)
 				case 2:
-					log.Println("Will exit after process stops... (Ctrl+C to force kill)")
+					log.Println("Will exit after processes stop... (Ctrl+C to force kill)")
 					restartPending = false
 					exitPending = true
-				case 3:
+					_ = proc.Signal(syscall.SIGINT) // Send another SIGINT to speed up exit
+				default: // 3+
 					log.Println("Force killing process...")
 					_ = proc.Signal(syscall.SIGKILL)
 					procCancel()
@@ -481,6 +492,10 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	// Signal handling state - outside loop so it persists across restarts
+	sigCount := 0
+	var lastSignalTime time.Time
+
 	for {
 		// Create a new context for each subprocess iteration
 		procCtx, procCancel := context.WithCancel(ctx)
@@ -489,7 +504,8 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 		var runners []*runner.Runner
 		for _, svc := range services {
 			proc := runner.New(svc.command, svc.args...)
-			svcName := svc.service // capture for closure
+			proc.ForwardOutput(true) // Forward subprocess output to terminal
+			svcName := svc.service   // capture for closure
 			proc.OnLine(func(line runner.LogLine) {
 				// Use service name as the stream to tag all output
 				store.AppendWithService(svcName, string(line.Stream), line.Text, line.Timestamp)
@@ -517,8 +533,6 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 			close(allDone)
 		}()
 
-		// Signal handling state
-		sigCount := 0
 		restartPending := false
 		exitPending := false
 
@@ -527,7 +541,14 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 		for {
 			select {
 			case <-sigCh:
+				now := time.Now()
+				// Reset signal count if more than 2 seconds since last signal
+				if now.Sub(lastSignalTime) > 2*time.Second {
+					sigCount = 0
+				}
+				lastSignalTime = now
 				sigCount++
+
 				switch sigCount {
 				case 1:
 					log.Println("Restarting... (Ctrl+C again to exit, third time to force kill)")
@@ -536,11 +557,14 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 						_ = r.Signal(syscall.SIGINT)
 					}
 				case 2:
-					log.Println("Will exit after process stops... (Ctrl+C to force kill)")
+					log.Println("Will exit after processes stop... (Ctrl+C to force kill)")
 					restartPending = false
 					exitPending = true
-				case 3:
-					log.Println("Force killing process...")
+					for _, r := range runners {
+						_ = r.Signal(syscall.SIGINT)
+					}
+				default: // 3+
+					log.Println("Force killing processes...")
 					for _, r := range runners {
 						_ = r.Signal(syscall.SIGKILL)
 					}

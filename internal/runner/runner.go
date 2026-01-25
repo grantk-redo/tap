@@ -5,9 +5,13 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
 	"sync"
 	"time"
 )
+
+// ansiRegex matches ANSI escape sequences (colors, cursor movement, etc.)
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 type Stream string
 
@@ -25,13 +29,14 @@ type LogLine struct {
 type LineHandler func(LogLine)
 
 type Runner struct {
-	name     string
-	args     []string
-	handlers []LineHandler
-	cmd      *exec.Cmd
-	done     chan struct{}
-	exitCode int
-	mu       sync.Mutex
+	name            string
+	args            []string
+	handlers        []LineHandler
+	cmd             *exec.Cmd
+	done            chan struct{}
+	exitCode        int
+	mu              sync.Mutex
+	forwardToStdout bool
 }
 
 func New(name string, args ...string) *Runner {
@@ -44,6 +49,11 @@ func New(name string, args ...string) *Runner {
 
 func (r *Runner) OnLine(handler LineHandler) {
 	r.handlers = append(r.handlers, handler)
+}
+
+// ForwardOutput enables forwarding captured output to os.Stdout/os.Stderr
+func (r *Runner) ForwardOutput(enabled bool) {
+	r.forwardToStdout = enabled
 }
 
 func (r *Runner) Start(ctx context.Context) error {
@@ -105,8 +115,24 @@ func (r *Runner) Start(ctx context.Context) error {
 }
 
 func (r *Runner) emit(line LogLine) {
+	// Forward to terminal if enabled (with original ANSI codes)
+	if r.forwardToStdout {
+		if line.Stream == Stdout {
+			_, _ = os.Stdout.WriteString(line.Text + "\n")
+		} else {
+			_, _ = os.Stderr.WriteString(line.Text + "\n")
+		}
+	}
+
+	// Strip ANSI codes before passing to handlers (for clean storage/indexing)
+	cleanLine := LogLine{
+		Stream:    line.Stream,
+		Text:      ansiRegex.ReplaceAllString(line.Text, ""),
+		Timestamp: line.Timestamp,
+	}
+
 	for _, h := range r.handlers {
-		h(line)
+		h(cleanLine)
 	}
 }
 
