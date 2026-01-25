@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -453,7 +454,9 @@ func TestSSEEndpoint(t *testing.T) {
 	server, store := newTestServer(t, nil)
 	defer func() { _ = store.Close() }()
 
-	req := httptest.NewRequest(http.MethodGet, "/sse", nil)
+	// Use a context we can cancel to stop the SSE handler
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/sse", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	// Run in goroutine since SSE blocks
@@ -463,8 +466,12 @@ func TestSSEEndpoint(t *testing.T) {
 		close(done)
 	}()
 
-	// Give it time to write headers
+	// Give it time to write headers, then cancel to stop the handler
 	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	// Wait for handler to finish before reading headers
+	<-done
 
 	if rec.Header().Get("Content-Type") != "text/event-stream" {
 		t.Errorf("Content-Type = %q, want text/event-stream", rec.Header().Get("Content-Type"))
