@@ -129,7 +129,7 @@ Custom Pattern Named Groups:
 		Run: runMain,
 	}
 
-	rootCmd.PersistentFlags().IntVarP(&port, "port", "p", 8080, "MCP server port")
+	rootCmd.PersistentFlags().IntVarP(&port, "port", "p", 19280, "MCP server port")
 	rootCmd.PersistentFlags().StringVar(&logPatternStr, "log-pattern", "", "regex with named groups: (?P<service>...), (?P<level>...), (?P<message>...)")
 	rootCmd.PersistentFlags().StringVarP(&formatName, "format", "f", "", "built-in log format (see 'tap formats')")
 	rootCmd.PersistentFlags().IntVarP(&maxEntries, "max-entries", "m", 0, "maximum log entries to keep (0 = unlimited)")
