@@ -12,17 +12,36 @@ import (
 	"github.com/pjtatlow/tap/internal/logstore"
 )
 
+// RestartRequest represents a request to restart services
+type RestartRequest struct {
+	Services []string // Empty means restart all
+}
+
 type Server struct {
 	store     *logstore.Store
 	mux       *http.ServeMux
 	startTime time.Time
+	restartCh chan<- RestartRequest // nil if restart not supported
 }
 
-func NewServer(store *logstore.Store) *Server {
+// ServerOption configures a Server
+type ServerOption func(*Server)
+
+// WithRestartChannel configures the server to send restart requests to the given channel
+func WithRestartChannel(ch chan<- RestartRequest) ServerOption {
+	return func(s *Server) {
+		s.restartCh = ch
+	}
+}
+
+func NewServer(store *logstore.Store, opts ...ServerOption) *Server {
 	s := &Server{
 		store:     store,
 		mux:       http.NewServeMux(),
 		startTime: time.Now(),
+	}
+	for _, opt := range opts {
+		opt(s)
 	}
 	s.setupRoutes()
 	return s
@@ -39,7 +58,6 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/sse", s.handleSSE)
 	s.mux.HandleFunc("/message", s.handleMessage)
 	s.mux.HandleFunc("/health", s.handleHealth)
-	s.mux.HandleFunc("/metrics", s.handleMetrics)
 	s.mux.HandleFunc("/logs", s.handleLogs)
 }
 
@@ -64,60 +82,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
-	stats := s.store.Stats()
-	services := s.store.Services()
-	uptimeSeconds := int64(time.Since(s.startTime).Seconds())
-
-	var sb strings.Builder
-
-	// Total log entries
-	sb.WriteString("# HELP tap_logs_total Total number of log entries\n")
-	sb.WriteString("# TYPE tap_logs_total gauge\n")
-	sb.WriteString(fmt.Sprintf("tap_logs_total %d\n", stats.Total))
-	sb.WriteString("\n")
-
-	// Logs by level
-	sb.WriteString("# HELP tap_logs_by_level Number of log entries by level\n")
-	sb.WriteString("# TYPE tap_logs_by_level gauge\n")
-	levelOrder := []logstore.LogLevel{
-		logstore.LevelTrace,
-		logstore.LevelDebug,
-		logstore.LevelInfo,
-		logstore.LevelWarn,
-		logstore.LevelError,
-		logstore.LevelFatal,
-		logstore.LevelUnknown,
-	}
-	for _, level := range levelOrder {
-		count := stats.ByLevel[level]
-		levelName := string(level)
-		if levelName == "" {
-			levelName = "unknown"
-		}
-		sb.WriteString(fmt.Sprintf("tap_logs_by_level{level=\"%s\"} %d\n", levelName, count))
-	}
-	sb.WriteString("\n")
-
-	// Logs by service
-	sb.WriteString("# HELP tap_logs_by_service Number of log entries by service\n")
-	sb.WriteString("# TYPE tap_logs_by_service gauge\n")
-	for _, service := range services {
-		count := stats.ByService[service]
-		sb.WriteString(fmt.Sprintf("tap_logs_by_service{service=\"%s\"} %d\n", service, count))
-	}
-	sb.WriteString("\n")
-
-	// Uptime
-	sb.WriteString("# HELP tap_uptime_seconds Server uptime in seconds\n")
-	sb.WriteString("# TYPE tap_uptime_seconds gauge\n")
-	sb.WriteString(fmt.Sprintf("tap_uptime_seconds %d\n", uptimeSeconds))
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(sb.String()))
 }
 
 // handleLogs returns recent logs as plain text or JSON.
@@ -408,29 +372,11 @@ func (s *Server) handleToolsList(w http.ResponseWriter, req *JSONRPCRequest) {
 			},
 		},
 		{
-			Name:        "get_log",
-			Description: "Fetch a specific log entry by ID with optional surrounding context. Returns the target entry and optionally lines before and after it.",
+			Name:        "restart_services",
+			Description: "Restart the managed processes. Sends SIGINT and restarts all processes.",
 			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"id": map[string]any{
-						"type":        "integer",
-						"description": "The log entry ID to fetch",
-					},
-					"before": map[string]any{
-						"type":        "integer",
-						"description": "Number of lines to show before the target entry (default: 0)",
-					},
-					"after": map[string]any{
-						"type":        "integer",
-						"description": "Number of lines to show after the target entry (default: 0)",
-					},
-					"context": map[string]any{
-						"type":        "integer",
-						"description": "Shorthand for setting both before and after to the same value",
-					},
-				},
-				"required": []string{"id"},
+				"type":       "object",
+				"properties": map[string]any{},
 			},
 		},
 	}
@@ -458,8 +404,8 @@ func (s *Server) handleToolsCall(w http.ResponseWriter, req *JSONRPCRequest) {
 		s.handleLogStats(w, req)
 	case "watch_logs":
 		s.handleWatchLogs(w, req, params.Arguments)
-	case "get_log":
-		s.handleGetLog(w, req, params.Arguments)
+	case "restart_services":
+		s.handleRestartServices(w, req)
 	default:
 		writeError(w, req.ID, -32602, "Unknown tool")
 	}
@@ -675,79 +621,22 @@ func (s *Server) handleWatchLogs(w http.ResponseWriter, req *JSONRPCRequest, arg
 	}
 }
 
-func (s *Server) handleGetLog(w http.ResponseWriter, req *JSONRPCRequest, args map[string]any) {
-	// Parse required id parameter
-	var id uint64
-	switch v := args["id"].(type) {
-	case float64:
-		id = uint64(v)
-	case int:
-		id = uint64(v)
+func (s *Server) handleRestartServices(w http.ResponseWriter, req *JSONRPCRequest) {
+	if s.restartCh == nil {
+		writeError(w, req.ID, -32000, "Restart not supported in this mode")
+		return
+	}
+
+	select {
+	case s.restartCh <- RestartRequest{}:
+		writeResult(w, req.ID, ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Restart requested for all services"}},
+		})
 	default:
-		writeError(w, req.ID, -32602, "id is required and must be an integer")
-		return
+		writeResult(w, req.ID, ToolResult{
+			Content: []ContentBlock{{Type: "text", Text: "Restart already pending"}},
+		})
 	}
-
-	if id == 0 {
-		writeError(w, req.ID, -32602, "id must be greater than 0")
-		return
-	}
-
-	// Check if the entry exists
-	entry := s.store.GetByID(id)
-	if entry == nil {
-		writeError(w, req.ID, -32602, fmt.Sprintf("log entry with ID %d not found", id))
-		return
-	}
-
-	// Parse context parameters
-	// context sets both before and after, but explicit before/after override
-	before, after := 0, 0
-	if c, ok := args["context"].(float64); ok {
-		before = int(c)
-		after = int(c)
-	}
-	if _, ok := args["before"]; ok {
-		if b, ok := args["before"].(float64); ok {
-			before = int(b)
-		}
-	}
-	if _, ok := args["after"]; ok {
-		if a, ok := args["after"].(float64); ok {
-			after = int(a)
-		}
-	}
-
-	// Get context if requested
-	var text string
-	if before > 0 || after > 0 {
-		entries := s.store.GetContext(id, before, after)
-		text = formatEntriesWithTarget(entries, id)
-	} else {
-		// Just return the single entry with the target marker
-		text = formatEntry(*entry) + fmt.Sprintf("  <-- ID: %d\n", id)
-	}
-
-	writeResult(w, req.ID, ToolResult{
-		Content: []ContentBlock{{Type: "text", Text: text}},
-	})
-}
-
-// formatEntriesWithTarget formats entries with a marker on the target entry.
-func formatEntriesWithTarget(entries []logstore.LogEntry, targetID uint64) string {
-	if len(entries) == 0 {
-		return "No log entries found"
-	}
-	var sb strings.Builder
-	for _, e := range entries {
-		line := formatEntry(e)
-		if e.ID == targetID {
-			sb.WriteString(line + fmt.Sprintf("  <-- ID: %d\n", targetID))
-		} else {
-			sb.WriteString(line + "\n")
-		}
-	}
-	return sb.String()
 }
 
 func formatStats(stats logstore.Stats) string {

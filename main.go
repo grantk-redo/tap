@@ -220,7 +220,8 @@ func runMain(cmd *cobra.Command, args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mcpServer := mcp.NewServer(store)
+	restartCh := make(chan mcp.RestartRequest, 1)
+	mcpServer := mcp.NewServer(store, mcp.WithRestartChannel(restartCh))
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mcpServer,
@@ -239,14 +240,14 @@ func runMain(cmd *cobra.Command, args []string) {
 	// Determine mode: command mode or stdin mode
 	if len(args) > 0 {
 		// Command mode: wrap a process
-		runCommandMode(ctx, cancel, args, store, httpServer, sigCh)
+		runCommandMode(ctx, cancel, args, store, httpServer, sigCh, restartCh)
 	} else {
 		// Stdin mode: read from piped input
 		runStdinMode(ctx, cancel, store, httpServer, sigCh)
 	}
 }
 
-func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []string, store *logstore.Store, httpServer *http.Server, sigCh chan os.Signal) {
+func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []string, store *logstore.Store, httpServer *http.Server, sigCh chan os.Signal, restartCh <-chan mcp.RestartRequest) {
 	// Signal handling state - outside loop so it persists across restarts
 	sigCount := 0
 	var lastSignalTime time.Time
@@ -300,6 +301,10 @@ func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []strin
 					_ = httpServer.Shutdown(context.Background())
 					return
 				}
+			case <-restartCh:
+				log.Println("Restart requested via MCP")
+				restartPending = true
+				_ = proc.Signal(syscall.SIGINT)
 			case <-proc.Done():
 				log.Printf("process exited with code %d", proc.ExitCode())
 				break loop
@@ -476,7 +481,8 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mcpServer := mcp.NewServer(store)
+	restartCh := make(chan mcp.RestartRequest, 1)
+	mcpServer := mcp.NewServer(store, mcp.WithRestartChannel(restartCh))
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mcpServer,
@@ -572,6 +578,12 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 					cancel()
 					_ = httpServer.Shutdown(context.Background())
 					return
+				}
+			case <-restartCh:
+				log.Println("Restart requested via MCP")
+				restartPending = true
+				for _, r := range runners {
+					_ = r.Signal(syscall.SIGINT)
 				}
 			case <-allDone:
 				log.Println("all processes exited")

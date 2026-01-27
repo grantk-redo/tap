@@ -107,7 +107,7 @@ func TestToolsList(t *testing.T) {
 		t.Fatalf("tools is not an array")
 	}
 
-	wantTools := []string{"tail_logs", "search_logs", "list_services", "clear_logs", "log_stats", "watch_logs", "get_log"}
+	wantTools := []string{"tail_logs", "search_logs", "list_services", "clear_logs", "log_stats", "watch_logs", "restart_services"}
 	if len(tools) != len(wantTools) {
 		t.Errorf("got %d tools, want %d", len(tools), len(wantTools))
 	}
@@ -1160,134 +1160,6 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-func TestMetricsEndpoint(t *testing.T) {
-	tests := []struct {
-		name         string
-		serviceRegex *regexp.Regexp
-		logs         []struct {
-			stream string
-			text   string
-		}
-		wantStatus     int
-		wantSubstrs    []string
-		notWantSubstrs []string
-	}{
-		{
-			name:         "empty store",
-			serviceRegex: nil,
-			logs:         nil,
-			wantStatus:   http.StatusOK,
-			wantSubstrs: []string{
-				"# HELP tap_logs_total Total number of log entries",
-				"# TYPE tap_logs_total gauge",
-				"tap_logs_total 0",
-				"# HELP tap_logs_by_level Number of log entries by level",
-				"# TYPE tap_logs_by_level gauge",
-				"# HELP tap_logs_by_service Number of log entries by service",
-				"# TYPE tap_logs_by_service gauge",
-				"# HELP tap_uptime_seconds Server uptime in seconds",
-				"# TYPE tap_uptime_seconds gauge",
-				"tap_uptime_seconds",
-			},
-		},
-		{
-			name:         "with logs and levels",
-			serviceRegex: nil,
-			logs: []struct {
-				stream string
-				text   string
-			}{
-				{"stdout", "INFO: message 1"},
-				{"stdout", "INFO: message 2"},
-				{"stderr", "ERROR: error message"},
-				{"stdout", "WARN: warning message"},
-			},
-			wantStatus: http.StatusOK,
-			wantSubstrs: []string{
-				"tap_logs_total 4",
-				"tap_logs_by_level{level=\"info\"} 2",
-				"tap_logs_by_level{level=\"error\"} 1",
-				"tap_logs_by_level{level=\"warn\"} 1",
-			},
-		},
-		{
-			name:         "with services",
-			serviceRegex: regexp.MustCompile(`\[(?P<service>\w+)\]`),
-			logs: []struct {
-				stream string
-				text   string
-			}{
-				{"stdout", "[api] INFO: request 1"},
-				{"stdout", "[api] INFO: request 2"},
-				{"stdout", "[worker] ERROR: job failed"},
-			},
-			wantStatus: http.StatusOK,
-			wantSubstrs: []string{
-				"tap_logs_total 3",
-				"tap_logs_by_service{service=\"api\"} 2",
-				"tap_logs_by_service{service=\"worker\"} 1",
-			},
-		},
-		{
-			name:         "no services metric when no services",
-			serviceRegex: nil,
-			logs: []struct {
-				stream string
-				text   string
-			}{
-				{"stdout", "INFO: no service here"},
-			},
-			wantStatus: http.StatusOK,
-			wantSubstrs: []string{
-				"tap_logs_total 1",
-				"# HELP tap_logs_by_service Number of log entries by service",
-			},
-			notWantSubstrs: []string{
-				"tap_logs_by_service{service=",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server, store := newTestServer(t, tt.serviceRegex)
-			defer func() { _ = store.Close() }()
-
-			now := time.Now()
-			for _, log := range tt.logs {
-				store.Append(log.stream, log.text, now)
-			}
-
-			req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-			rec := httptest.NewRecorder()
-			server.ServeHTTP(rec, req)
-
-			if rec.Code != tt.wantStatus {
-				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
-			}
-
-			contentType := rec.Header().Get("Content-Type")
-			if !bytes.Contains([]byte(contentType), []byte("text/plain")) {
-				t.Errorf("Content-Type = %q, want text/plain", contentType)
-			}
-
-			body := rec.Body.String()
-
-			for _, substr := range tt.wantSubstrs {
-				if !bytes.Contains([]byte(body), []byte(substr)) {
-					t.Errorf("expected output to contain %q\ngot: %s", substr, body)
-				}
-			}
-
-			for _, substr := range tt.notWantSubstrs {
-				if bytes.Contains([]byte(body), []byte(substr)) {
-					t.Errorf("expected output NOT to contain %q\ngot: %s", substr, body)
-				}
-			}
-		})
-	}
-}
-
 func TestSearchLogsContextEdgeCases(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1685,283 +1557,6 @@ func TestWatchLogsWithFilters(t *testing.T) {
 	}
 }
 
-func TestGetLogToolListed(t *testing.T) {
-	server, store := newTestServer(t, nil)
-	defer func() { _ = store.Close() }()
-
-	resp := postJSON(t, server, JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/list",
-	})
-
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %v", resp.Error)
-	}
-
-	result, ok := resp.Result.(map[string]any)
-	if !ok {
-		t.Fatalf("result is not a map")
-	}
-
-	tools, ok := result["tools"].([]any)
-	if !ok {
-		t.Fatalf("tools is not an array")
-	}
-
-	found := false
-	for _, tool := range tools {
-		toolMap := tool.(map[string]any)
-		if toolMap["name"] == "get_log" {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Error("get_log tool not found in tools list")
-	}
-}
-
-func TestGetLog(t *testing.T) {
-	tests := []struct {
-		name           string
-		logs           []string
-		args           map[string]any
-		wantError      bool
-		wantErrorCode  int
-		wantSubstrs    []string
-		notWantSubstrs []string
-	}{
-		{
-			name: "fetch single entry by ID",
-			logs: []string{"line 1", "line 2", "line 3"},
-			args: map[string]any{
-				"id": float64(2),
-			},
-			wantSubstrs: []string{
-				"line 2",
-				"<-- ID: 2",
-			},
-			notWantSubstrs: []string{
-				"line 1",
-				"line 3",
-			},
-		},
-		{
-			name: "fetch entry with before context",
-			logs: []string{"line 1", "line 2", "line 3", "line 4", "line 5"},
-			args: map[string]any{
-				"id":     float64(3),
-				"before": float64(2),
-			},
-			wantSubstrs: []string{
-				"line 1",
-				"line 2",
-				"line 3",
-				"<-- ID: 3",
-			},
-			notWantSubstrs: []string{
-				"line 4",
-				"line 5",
-			},
-		},
-		{
-			name: "fetch entry with after context",
-			logs: []string{"line 1", "line 2", "line 3", "line 4", "line 5"},
-			args: map[string]any{
-				"id":    float64(3),
-				"after": float64(2),
-			},
-			wantSubstrs: []string{
-				"line 3",
-				"line 4",
-				"line 5",
-				"<-- ID: 3",
-			},
-			notWantSubstrs: []string{
-				"line 1",
-				"line 2",
-			},
-		},
-		{
-			name: "fetch entry with context shorthand",
-			logs: []string{"line 1", "line 2", "line 3", "line 4", "line 5"},
-			args: map[string]any{
-				"id":      float64(3),
-				"context": float64(1),
-			},
-			wantSubstrs: []string{
-				"line 2",
-				"line 3",
-				"line 4",
-				"<-- ID: 3",
-			},
-			notWantSubstrs: []string{
-				"line 1",
-				"line 5",
-			},
-		},
-		{
-			name: "before/after override context",
-			logs: []string{"line 1", "line 2", "line 3", "line 4", "line 5"},
-			args: map[string]any{
-				"id":      float64(3),
-				"context": float64(1),
-				"before":  float64(2),
-				"after":   float64(0),
-			},
-			wantSubstrs: []string{
-				"line 1",
-				"line 2",
-				"line 3",
-				"<-- ID: 3",
-			},
-			notWantSubstrs: []string{
-				"line 4",
-				"line 5",
-			},
-		},
-		{
-			name: "context clips at boundaries",
-			logs: []string{"line 1", "line 2", "line 3"},
-			args: map[string]any{
-				"id":      float64(1),
-				"context": float64(5),
-			},
-			wantSubstrs: []string{
-				"line 1",
-				"line 2",
-				"line 3",
-				"<-- ID: 1",
-			},
-		},
-		{
-			name: "nonexistent ID returns error",
-			logs: []string{"line 1", "line 2"},
-			args: map[string]any{
-				"id": float64(999),
-			},
-			wantError:     true,
-			wantErrorCode: -32602,
-		},
-		{
-			name: "missing ID returns error",
-			logs: []string{"line 1"},
-			args: map[string]any{},
-			wantError:     true,
-			wantErrorCode: -32602,
-		},
-		{
-			name: "ID 0 returns error",
-			logs: []string{"line 1"},
-			args: map[string]any{
-				"id": float64(0),
-			},
-			wantError:     true,
-			wantErrorCode: -32602,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server, store := newTestServer(t, nil)
-			defer func() { _ = store.Close() }()
-
-			now := time.Now()
-			for _, log := range tt.logs {
-				store.Append("stdout", log, now)
-			}
-
-			resp := postJSON(t, server, JSONRPCRequest{
-				JSONRPC: "2.0",
-				ID:      1,
-				Method:  "tools/call",
-				Params: map[string]any{
-					"name":      "get_log",
-					"arguments": tt.args,
-				},
-			})
-
-			if tt.wantError {
-				if resp.Error == nil {
-					t.Fatal("expected error, got none")
-				}
-				if resp.Error.Code != tt.wantErrorCode {
-					t.Errorf("error code = %d, want %d", resp.Error.Code, tt.wantErrorCode)
-				}
-				return
-			}
-
-			if resp.Error != nil {
-				t.Fatalf("unexpected error: %v", resp.Error)
-			}
-
-			text := getToolResultText(t, resp)
-
-			for _, substr := range tt.wantSubstrs {
-				if !bytes.Contains([]byte(text), []byte(substr)) {
-					t.Errorf("expected output to contain %q\ngot: %s", substr, text)
-				}
-			}
-
-			for _, substr := range tt.notWantSubstrs {
-				if bytes.Contains([]byte(text), []byte(substr)) {
-					t.Errorf("expected output NOT to contain %q\ngot: %s", substr, text)
-				}
-			}
-		})
-	}
-}
-
-func TestGetLogWithService(t *testing.T) {
-	re := regexp.MustCompile(`\[(?P<service>\w+)\]`)
-	server, store := newTestServer(t, re)
-	defer func() { _ = store.Close() }()
-
-	now := time.Now()
-	store.Append("stdout", "[api] request received", now)
-	store.Append("stdout", "[api] ERROR: request failed", now)
-	store.Append("stdout", "[api] response sent", now)
-
-	resp := postJSON(t, server, JSONRPCRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/call",
-		Params: map[string]any{
-			"name": "get_log",
-			"arguments": map[string]any{
-				"id":      float64(2),
-				"context": float64(1),
-			},
-		},
-	})
-
-	if resp.Error != nil {
-		t.Fatalf("unexpected error: %v", resp.Error)
-	}
-
-	text := getToolResultText(t, resp)
-
-	// Should include service information in output
-	if !bytes.Contains([]byte(text), []byte("[api]")) {
-		t.Errorf("expected output to contain service name [api]\ngot: %s", text)
-	}
-
-	// Target entry should have the marker
-	if !bytes.Contains([]byte(text), []byte("<-- ID: 2")) {
-		t.Errorf("expected output to contain target marker\ngot: %s", text)
-	}
-
-	// Should show context lines
-	if !bytes.Contains([]byte(text), []byte("request received")) {
-		t.Errorf("expected output to contain before context\ngot: %s", text)
-	}
-	if !bytes.Contains([]byte(text), []byte("response sent")) {
-		t.Errorf("expected output to contain after context\ngot: %s", text)
-	}
-}
-
 func TestWatchLogsDefaultTimeout(t *testing.T) {
 	server, store := newTestServer(t, nil)
 	defer func() { _ = store.Close() }()
@@ -1998,5 +1593,173 @@ func TestWatchLogsDefaultTimeout(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		// Expected - still waiting for 30s timeout
 		// Cancel by closing the test (deferred store.Close will clean up)
+	}
+}
+
+func TestRestartServicesToolListed(t *testing.T) {
+	server, store := newTestServer(t, nil)
+	defer func() { _ = store.Close() }()
+
+	resp := postJSON(t, server, JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/list",
+	})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	result, ok := resp.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("result is not a map")
+	}
+
+	tools, ok := result["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools is not an array")
+	}
+
+	found := false
+	for _, tool := range tools {
+		toolMap := tool.(map[string]any)
+		if toolMap["name"] == "restart_services" {
+			found = true
+			// Verify description
+			if desc, ok := toolMap["description"].(string); !ok || desc == "" {
+				t.Error("restart_services tool has no description")
+			}
+			break
+		}
+	}
+
+	if !found {
+		t.Error("restart_services tool not found in tools list")
+	}
+}
+
+func TestRestartServices(t *testing.T) {
+	tests := []struct {
+		name         string
+		setupChannel bool
+		wantSubstr   string
+	}{
+		{
+			name:         "success with channel",
+			setupChannel: true,
+			wantSubstr:   "Restart requested for all services",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := logstore.New(nil, 0)
+			if err != nil {
+				t.Fatalf("logstore.New() error = %v", err)
+			}
+			defer func() { _ = store.Close() }()
+
+			var restartCh chan RestartRequest
+			var server *Server
+			if tt.setupChannel {
+				restartCh = make(chan RestartRequest, 1)
+				server = NewServer(store, WithRestartChannel(restartCh))
+			} else {
+				server = NewServer(store)
+			}
+
+			resp := postJSON(t, server, JSONRPCRequest{
+				JSONRPC: "2.0",
+				ID:      1,
+				Method:  "tools/call",
+				Params: map[string]any{
+					"name":      "restart_services",
+					"arguments": map[string]any{},
+				},
+			})
+
+			if resp.Error != nil {
+				t.Fatalf("unexpected error: %v", resp.Error)
+			}
+
+			text := getToolResultText(t, resp)
+			if !bytes.Contains([]byte(text), []byte(tt.wantSubstr)) {
+				t.Errorf("expected output to contain %q, got: %s", tt.wantSubstr, text)
+			}
+
+			// Verify a restart request was sent to the channel
+			if tt.setupChannel {
+				select {
+				case req := <-restartCh:
+					// Verify it's an empty request (restart all)
+					if len(req.Services) != 0 {
+						t.Errorf("expected empty services list, got: %v", req.Services)
+					}
+				default:
+					t.Error("no restart request was sent to the channel")
+				}
+			}
+		})
+	}
+}
+
+func TestRestartServicesNoChannel(t *testing.T) {
+	server, store := newTestServer(t, nil)
+	defer func() { _ = store.Close() }()
+
+	resp := postJSON(t, server, JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
+		Params: map[string]any{
+			"name":      "restart_services",
+			"arguments": map[string]any{},
+		},
+	})
+
+	if resp.Error == nil {
+		t.Fatal("expected error when restart channel is not configured")
+	}
+
+	if resp.Error.Code != -32000 {
+		t.Errorf("error code = %d, want -32000", resp.Error.Code)
+	}
+
+	if !bytes.Contains([]byte(resp.Error.Message), []byte("not supported")) {
+		t.Errorf("error message should mention 'not supported', got: %s", resp.Error.Message)
+	}
+}
+
+func TestRestartServicesPending(t *testing.T) {
+	store, err := logstore.New(nil, 0)
+	if err != nil {
+		t.Fatalf("logstore.New() error = %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create a channel with buffer size 1
+	restartCh := make(chan RestartRequest, 1)
+	server := NewServer(store, WithRestartChannel(restartCh))
+
+	// Pre-fill the channel to simulate a pending restart
+	restartCh <- RestartRequest{}
+
+	resp := postJSON(t, server, JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
+		Params: map[string]any{
+			"name":      "restart_services",
+			"arguments": map[string]any{},
+		},
+	})
+
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+
+	text := getToolResultText(t, resp)
+	if !bytes.Contains([]byte(text), []byte("Restart already pending")) {
+		t.Errorf("expected 'Restart already pending' message, got: %s", text)
 	}
 }
