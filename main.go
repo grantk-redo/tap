@@ -18,6 +18,7 @@ import (
 	"github.com/pjtatlow/tap/internal/logstore"
 	"github.com/pjtatlow/tap/internal/mcp"
 	"github.com/pjtatlow/tap/internal/runner"
+	"github.com/pjtatlow/tap/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -492,20 +493,56 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	// Create TUI for interactive filtering
+	serviceNames := make([]string, len(services))
+	for i, svc := range services {
+		serviceNames[i] = svc.service
+	}
+	ui := tui.New(serviceNames)
+
+	if ui.IsEnabled() {
+		if err := ui.Start(ctx); err != nil {
+			log.Printf("warning: failed to start TUI: %v", err)
+		} else {
+			defer ui.Stop()
+		}
+	}
+
 	// Signal handling state - outside loop so it persists across restarts
 	sigCount := 0
 	var lastSignalTime time.Time
+
+	// Track which services need to restart (for filtered restart)
+	restartServices := make(map[string]bool)
+
+	// Persistent runner map (survives restarts for filtered restart support)
+	persistentRunnerMap := make(map[string]*runner.Runner)
 
 	for {
 		// Create a new context for each subprocess iteration
 		procCtx, procCancel := context.WithCancel(ctx)
 
-		// Start all processes
+		// Start all processes (or only those that need restart)
 		var runners []*runner.Runner
 		for _, svc := range services {
+			// For filtered restart: keep existing runners that don't need restart
+			if len(restartServices) > 0 && !restartServices[svc.service] {
+				if existing, ok := persistentRunnerMap[svc.service]; ok {
+					runners = append(runners, existing)
+					continue
+				}
+			}
+
 			proc := runner.New(svc.command, svc.args...)
-			proc.ForwardOutput(true) // Forward subprocess output to terminal
-			svcName := svc.service   // capture for closure
+
+			// Use TUI's service writer if TUI is enabled
+			if ui.IsEnabled() {
+				proc.SetOutputWriter(ui.ServiceWriter(svc.service))
+			} else {
+				proc.ForwardOutput(true)
+			}
+
+			svcName := svc.service // capture for closure
 			proc.OnLine(func(line runner.LogLine) {
 				// Use service name as the stream to tag all output
 				store.AppendWithService(svcName, string(line.Stream), line.Text, line.Timestamp)
@@ -517,7 +554,11 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 			}
 			log.Printf("started service: %s (command: %s)", svc.service, svc.command)
 			runners = append(runners, proc)
+			persistentRunnerMap[svc.service] = proc
 		}
+
+		// Clear restart set after starting
+		restartServices = make(map[string]bool)
 
 		if len(runners) == 0 {
 			procCancel()
@@ -535,6 +576,7 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 
 		restartPending := false
 		exitPending := false
+		var filteredRestart string // service name if filtered restart
 
 		// Handle signals and process exit
 	loop:
@@ -551,10 +593,22 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 
 				switch sigCount {
 				case 1:
-					log.Println("Restarting... (Ctrl+C again to exit, third time to force kill)")
-					restartPending = true
-					for _, r := range runners {
-						_ = r.Signal(syscall.SIGINT)
+					// Check if we're in filtered view
+					filteredRestart = ui.CurrentFilter()
+					if filteredRestart != "" {
+						log.Printf("Restarting %s... (Ctrl+C again to exit, third time to force kill)", filteredRestart)
+						restartPending = true
+						restartServices[filteredRestart] = true
+						// Only signal the filtered service
+						if r, ok := persistentRunnerMap[filteredRestart]; ok {
+							_ = r.Signal(syscall.SIGINT)
+						}
+					} else {
+						log.Println("Restarting all... (Ctrl+C again to exit, third time to force kill)")
+						restartPending = true
+						for _, r := range runners {
+							_ = r.Signal(syscall.SIGINT)
+						}
 					}
 				case 2:
 					log.Println("Will exit after processes stop... (Ctrl+C to force kill)")
@@ -583,7 +637,11 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 
 		// Decide what to do after process exits
 		if restartPending {
-			log.Println("Restarting processes...")
+			if filteredRestart != "" {
+				log.Printf("Restarting %s...", filteredRestart)
+			} else {
+				log.Println("Restarting all processes...")
+			}
 			continue // restart the loop
 		}
 		if exitPending {

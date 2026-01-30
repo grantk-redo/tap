@@ -3,6 +3,7 @@ package runner
 import (
 	"bufio"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
@@ -37,6 +38,7 @@ type Runner struct {
 	exitCode        int
 	mu              sync.Mutex
 	forwardToStdout bool
+	outputWriter    io.Writer // custom output writer (if set, used instead of os.Stdout)
 }
 
 func New(name string, args ...string) *Runner {
@@ -54,6 +56,13 @@ func (r *Runner) OnLine(handler LineHandler) {
 // ForwardOutput enables forwarding captured output to os.Stdout/os.Stderr
 func (r *Runner) ForwardOutput(enabled bool) {
 	r.forwardToStdout = enabled
+}
+
+// SetOutputWriter sets a custom writer for output. When set, output is written
+// to this writer instead of os.Stdout/os.Stderr. This also enables forwarding.
+func (r *Runner) SetOutputWriter(w io.Writer) {
+	r.outputWriter = w
+	r.forwardToStdout = true
 }
 
 func (r *Runner) Start(ctx context.Context) error {
@@ -117,7 +126,10 @@ func (r *Runner) Start(ctx context.Context) error {
 func (r *Runner) emit(line LogLine) {
 	// Forward to terminal if enabled (with original ANSI codes)
 	if r.forwardToStdout {
-		if line.Stream == Stdout {
+		if r.outputWriter != nil {
+			// Use custom writer (e.g., TUI service writer)
+			_, _ = r.outputWriter.Write([]byte(line.Text + "\n"))
+		} else if line.Stream == Stdout {
 			_, _ = os.Stdout.WriteString(line.Text + "\n")
 		} else {
 			_, _ = os.Stderr.WriteString(line.Text + "\n")
