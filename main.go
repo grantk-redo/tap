@@ -75,6 +75,7 @@ var (
 	formatName    string
 	maxEntries    int
 	serviceName   string
+	usePty        bool
 )
 
 // serviceCommand represents a service name and its command to run
@@ -133,6 +134,7 @@ Custom Pattern Named Groups:
 	rootCmd.PersistentFlags().StringVar(&logPatternStr, "log-pattern", "", "regex with named groups: (?P<service>...), (?P<level>...), (?P<message>...)")
 	rootCmd.PersistentFlags().StringVarP(&formatName, "format", "f", "", "built-in log format (see 'tap formats')")
 	rootCmd.PersistentFlags().IntVarP(&maxEntries, "max-entries", "m", 0, "maximum log entries to keep (0 = unlimited)")
+	rootCmd.PersistentFlags().BoolVar(&usePty, "pty", true, "use pseudo-terminal for immediate output (combines stdout/stderr, disable with --pty=false)")
 	rootCmd.Flags().StringVarP(&serviceName, "service", "s", "", "service name for stdin mode (defaults to empty)")
 
 	formatsCmd := &cobra.Command{
@@ -258,6 +260,7 @@ func runCommandMode(ctx context.Context, cancel context.CancelFunc, args []strin
 
 		proc := runner.New(args[0], args[1:]...)
 		proc.ForwardOutput(true) // Forward subprocess output to terminal
+		proc.UsePty(usePty)
 		proc.OnLine(func(line runner.LogLine) {
 			store.Append(string(line.Stream), line.Text, line.Timestamp)
 		})
@@ -511,7 +514,8 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 		for _, svc := range services {
 			proc := runner.New(svc.command, svc.args...)
 			proc.ForwardOutput(true) // Forward subprocess output to terminal
-			svcName := svc.service   // capture for closure
+			proc.UsePty(usePty)
+			svcName := svc.service // capture for closure
 			proc.OnLine(func(line runner.LogLine) {
 				// Use service name as the stream to tag all output
 				store.AppendWithService(svcName, string(line.Stream), line.Text, line.Timestamp)

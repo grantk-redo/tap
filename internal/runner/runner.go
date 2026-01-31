@@ -3,11 +3,14 @@ package runner
 import (
 	"bufio"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 // ansiRegex matches ANSI escape sequences (colors, cursor movement, etc.)
@@ -37,6 +40,8 @@ type Runner struct {
 	exitCode        int
 	mu              sync.Mutex
 	forwardToStdout bool
+	usePty          bool
+	ptyFile         *os.File
 }
 
 func New(name string, args ...string) *Runner {
@@ -56,9 +61,46 @@ func (r *Runner) ForwardOutput(enabled bool) {
 	r.forwardToStdout = enabled
 }
 
+// UsePty enables pseudo-terminal mode. This causes child processes to use
+// line buffering instead of block buffering, resulting in more immediate output.
+// Note: PTY mode combines stdout and stderr into a single stream, so all output
+// will be reported as stdout.
+func (r *Runner) UsePty(enabled bool) {
+	r.usePty = enabled
+}
+
 func (r *Runner) Start(ctx context.Context) error {
 	r.cmd = exec.CommandContext(ctx, r.name, r.args...)
 
+	if r.usePty {
+		return r.startWithPty()
+	}
+	return r.startWithPipes()
+}
+
+func (r *Runner) startWithPty() error {
+	ptmx, err := pty.Start(r.cmd)
+	if err != nil {
+		return err
+	}
+	r.ptyFile = ptmx
+
+	go func() {
+		r.scanReader(ptmx, Stdout)
+		_ = ptmx.Close()
+		_ = r.cmd.Wait()
+		r.mu.Lock()
+		if r.cmd.ProcessState != nil {
+			r.exitCode = r.cmd.ProcessState.ExitCode()
+		}
+		r.mu.Unlock()
+		close(r.done)
+	}()
+
+	return nil
+}
+
+func (r *Runner) startWithPipes() error {
 	stdout, err := r.cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -78,26 +120,12 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			r.emit(LogLine{
-				Stream:    Stdout,
-				Text:      scanner.Text(),
-				Timestamp: time.Now(),
-			})
-		}
+		r.scanReader(stdout, Stdout)
 	}()
 
 	go func() {
 		defer wg.Done()
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			r.emit(LogLine{
-				Stream:    Stderr,
-				Text:      scanner.Text(),
-				Timestamp: time.Now(),
-			})
-		}
+		r.scanReader(stderr, Stderr)
 	}()
 
 	go func() {
@@ -112,6 +140,17 @@ func (r *Runner) Start(ctx context.Context) error {
 	}()
 
 	return nil
+}
+
+func (r *Runner) scanReader(reader io.Reader, stream Stream) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		r.emit(LogLine{
+			Stream:    stream,
+			Text:      scanner.Text(),
+			Timestamp: time.Now(),
+		})
+	}
 }
 
 func (r *Runner) emit(line LogLine) {

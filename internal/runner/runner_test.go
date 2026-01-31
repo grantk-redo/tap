@@ -374,3 +374,96 @@ func TestRunnerSignalNotStarted(t *testing.T) {
 		t.Errorf("Signal() on unstarted runner error = %v, want nil", err)
 	}
 }
+
+func TestRunnerPtyMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		cmd        []string
+		wantText   string
+		wantStream Stream
+	}{
+		{
+			name:       "captures stdout via pty",
+			cmd:        []string{"sh", "-c", "echo hello"},
+			wantText:   "hello",
+			wantStream: Stdout,
+		},
+		{
+			name:       "captures stderr via pty as stdout",
+			cmd:        []string{"sh", "-c", "echo error >&2"},
+			wantText:   "error",
+			wantStream: Stdout, // PTY combines stdout/stderr
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New(tt.cmd[0], tt.cmd[1:]...)
+			r.UsePty(true)
+
+			var lines []LogLine
+			var mu sync.Mutex
+			r.OnLine(func(line LogLine) {
+				mu.Lock()
+				lines = append(lines, line)
+				mu.Unlock()
+			})
+
+			ctx := context.Background()
+			if err := r.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+
+			select {
+			case <-r.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("timeout waiting for process")
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(lines) == 0 {
+				t.Fatal("got 0 lines, want at least 1")
+			}
+			if lines[0].Text != tt.wantText {
+				t.Errorf("Text = %q, want %q", lines[0].Text, tt.wantText)
+			}
+			if lines[0].Stream != tt.wantStream {
+				t.Errorf("Stream = %q, want %q", lines[0].Stream, tt.wantStream)
+			}
+		})
+	}
+}
+
+func TestRunnerPtyMultipleLines(t *testing.T) {
+	r := New("sh", "-c", "echo line1; echo line2; echo line3")
+	r.UsePty(true)
+
+	var lines []LogLine
+	var mu sync.Mutex
+	r.OnLine(func(line LogLine) {
+		mu.Lock()
+		lines = append(lines, line)
+		mu.Unlock()
+	})
+
+	ctx := context.Background()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	<-r.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) != 3 {
+		t.Fatalf("got %d lines, want 3", len(lines))
+	}
+
+	want := []string{"line1", "line2", "line3"}
+	for i, w := range want {
+		if lines[i].Text != w {
+			t.Errorf("lines[%d].Text = %q, want %q", i, lines[i].Text, w)
+		}
+	}
+}
