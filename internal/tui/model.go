@@ -74,7 +74,7 @@ type Model struct {
 	serviceIndex  map[string]int
 	logBuffers    map[string]*RingBuffer // Per-service buffers
 	allLogs       *RingBuffer            // Combined "All" view
-	currentFilter int                    // 0 = All, 1+ = specific service
+	currentFilter int                    // 0 = All, 1+ = specific service, 9 = secret ball game
 	scrollOffset  int                    // lines from bottom (0 = showing newest)
 	width         int
 	height        int
@@ -82,6 +82,9 @@ type Model struct {
 	ready         bool          // true after first WindowSizeMsg
 	tabs          []tabInfo     // Tab positions for click detection
 	filterChanged func(int)     // Callback when filter changes
+
+	// Secret ball game (press 9)
+	ballGame *BallGame
 }
 
 // NewModel creates a new TUI model.
@@ -162,6 +165,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
+		// Update ball game with correct game area dimensions
+		if m.ballGame != nil {
+			gameHeight := m.height - 4
+			if gameHeight < 1 {
+				gameHeight = 1
+			}
+			m.ballGame.width = m.width
+			m.ballGame.height = gameHeight
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -173,6 +185,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LogMsg:
 		m.appendLog(msg)
 		return m, m.listenForLogs()
+
+	case TickMsg:
+		// Update ball game physics
+		if m.currentFilter == 9 && m.ballGame != nil {
+			// Game area is smaller than full terminal (header + separator + help bar)
+			gameHeight := m.height - 4
+			if gameHeight < 1 {
+				gameHeight = 1
+			}
+			m.ballGame.Update(m.width, gameHeight)
+			return m, Tick()
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -180,6 +205,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleMouse processes mouse input (scroll wheel and clicks).
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// In ball game mode, pass mouse to ball game
+	if m.currentFilter == 9 && m.ballGame != nil {
+		m.ballGame.HandleMouse(msg)
+		return m, nil
+	}
+
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		m.scrollUp(3)
@@ -213,6 +244,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "0":
+		if m.currentFilter == 9 {
+			m.ballGame = nil
+		}
 		m.currentFilter = 0
 		m.scrollOffset = 0
 		if m.filterChanged != nil {
@@ -220,9 +254,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+	case "1", "2", "3", "4", "5", "6", "7", "8":
 		idx := int(msg.String()[0] - '0')
 		if idx <= len(m.services) {
+			if m.currentFilter == 9 {
+				m.ballGame = nil
+			}
 			m.currentFilter = idx
 			m.scrollOffset = 0
 			if m.filterChanged != nil {
@@ -230,6 +267,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case "9":
+		// Secret ball game mode!
+		if m.currentFilter == 9 {
+			// Already in ball mode, go back to All
+			m.currentFilter = 0
+			m.ballGame = nil
+			m.scrollOffset = 0
+			if m.filterChanged != nil {
+				m.filterChanged(0)
+			}
+			return m, nil
+		}
+		m.currentFilter = 9
+		gameHeight := m.height - 4
+		if gameHeight < 1 {
+			gameHeight = 1
+		}
+		m.ballGame = NewBallGame(m.width, gameHeight)
+		return m, Tick()
 
 	case "k", "K", "up":
 		m.scrollUp(1)
@@ -354,6 +411,11 @@ func (m *Model) scrollDown(lines int) {
 func (m Model) View() string {
 	if !m.ready {
 		return "Initializing..."
+	}
+
+	// Secret ball game mode
+	if m.currentFilter == 9 && m.ballGame != nil {
+		return m.renderBallGame()
 	}
 
 	var b strings.Builder
@@ -496,6 +558,53 @@ func (m Model) renderHelpBar() string {
 func (m Model) formatServicePrefix(service string, index int) string {
 	style := lipgloss.NewStyle().Foreground(tabColors[index%len(tabColors)])
 	return style.Render(fmt.Sprintf("[%s]", service)) + " "
+}
+
+// renderBallGame renders the secret ball game.
+func (m Model) renderBallGame() string {
+	var b strings.Builder
+
+	// Header with score
+	scoreStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("208")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 1)
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("212")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 1)
+
+	score := scoreStyle.Render(fmt.Sprintf("🏀 %d", m.ballGame.Score()))
+	title := titleStyle.Render("● BASKETBALL ●")
+
+	// Score on left, title centered
+	titlePadding := (m.width - lipgloss.Width(title)) / 2
+	scorePadding := titlePadding - lipgloss.Width(score)
+	if scorePadding < 0 {
+		scorePadding = 0
+	}
+
+	b.WriteString(score)
+	b.WriteString(strings.Repeat(" ", scorePadding))
+	b.WriteString(title)
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", m.width))
+	b.WriteString("\n")
+
+	// Ball game area
+	gameHeight := m.height - 4 // header + separator + help
+	if gameHeight < 1 {
+		gameHeight = 1
+	}
+	b.WriteString(m.ballGame.Render(m.width, gameHeight))
+
+	// Help bar
+	help := helpStyle.Render("drag+throw ball into hoop • 9 or 0:back to logs")
+	b.WriteString(help)
+
+	return b.String()
 }
 
 // CurrentFilter returns the current filter index (for external access).
