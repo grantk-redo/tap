@@ -36,7 +36,7 @@ Process   Bleve Index
 - **root package (main.go)** - CLI entry point using Cobra. Handles command mode, stdin mode, and `run` subcommand for multiple processes.
 - **internal/runner** - Spawns processes, captures stdout/stderr via pipes, emits `LogLine` events to handlers.
 - **internal/logstore** - In-memory log storage with Bleve full-text search. Parses logs to extract service, level, and message using pattern matching, JSON field detection, or text patterns.
-- **internal/mcp** - HTTP server implementing MCP protocol (JSON-RPC 2.0 over SSE). Exposes tools: `list_services`, `tail_logs`, `search_logs`, `clear_logs`, `log_stats`, `watch_logs`, `get_log`.
+- **internal/mcp** - HTTP server implementing MCP protocol (JSON-RPC 2.0 over SSE). Exposes tools: `list_services`, `tail_logs`, `search_logs`, `clear_logs`, `log_stats`, `watch_logs`, `restart_services`.
 
 ### Log Parsing Priority
 
@@ -49,7 +49,6 @@ Process   Bleve Index
 - `GET /sse` - SSE connection, returns message endpoint URL
 - `POST /message` - JSON-RPC 2.0 handler
 - `GET /health` - Health check (JSON)
-- `GET /metrics` - Prometheus-style metrics
 
 ## Testing Notes
 
