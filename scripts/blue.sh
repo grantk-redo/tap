@@ -1,4 +1,5 @@
 #!/bin/bash
+trap 'exit 0' SIGINT SIGTERM
 BLUE='\033[0;34m'
 NC='\033[0m'
 

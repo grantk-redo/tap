@@ -518,6 +518,16 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 	// Persistent runner map (survives restarts for filtered restart support)
 	persistentRunnerMap := make(map[string]*runner.Runner)
 
+	// Helper to log status - routes through TUI when enabled
+	logStatus := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		if ui.IsEnabled() {
+			ui.WriteSystem(msg)
+		} else {
+			log.Print(msg)
+		}
+	}
+
 	for {
 		// Create a new context for each subprocess iteration
 		procCtx, procCancel := context.WithCancel(ctx)
@@ -552,7 +562,7 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 				log.Printf("failed to start %s: %v", svc.service, err)
 				continue
 			}
-			log.Printf("started service: %s (command: %s)", svc.service, svc.command)
+			logStatus("started service: %s (command: %s)", svc.service, svc.command)
 			runners = append(runners, proc)
 			persistentRunnerMap[svc.service] = proc
 		}
@@ -574,9 +584,7 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 			close(allDone)
 		}()
 
-		restartPending := false
 		exitPending := false
-		var filteredRestart string // service name if filtered restart
 
 		// Handle signals and process exit
 	loop:
@@ -589,36 +597,71 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 					sigCount = 0
 				}
 				lastSignalTime = now
+
+				// Check if we're in filtered view - first Ctrl+C restarts only that service
+				filteredSvc := ui.CurrentFilter()
+				if filteredSvc != "" && sigCount == 0 {
+					sigCount = 1 // Set to 1 so next Ctrl+C escalates to exit
+					logStatus("Restarting %s... (Ctrl+C again to exit, third time to force kill)", filteredSvc)
+					// Only signal and restart the filtered service
+					if r, ok := persistentRunnerMap[filteredSvc]; ok {
+						_ = r.Signal(syscall.SIGINT)
+						// Wait for just this service to exit, then restart it
+						go func(svcName string, oldRunner *runner.Runner) {
+							<-oldRunner.Done()
+							logStatus("Restarting %s...", svcName)
+
+							// Find the service config
+							var svc serviceCommand
+							for _, s := range services {
+								if s.service == svcName {
+									svc = s
+									break
+								}
+							}
+
+							// Start new runner for this service
+							proc := runner.New(svc.command, svc.args...)
+							if ui.IsEnabled() {
+								proc.SetOutputWriter(ui.ServiceWriter(svc.service))
+							} else {
+								proc.ForwardOutput(true)
+							}
+							proc.OnLine(func(line runner.LogLine) {
+								store.AppendWithService(svcName, string(line.Stream), line.Text, line.Timestamp)
+							})
+
+							if err := proc.Start(procCtx); err != nil {
+								log.Printf("failed to restart %s: %v", svcName, err)
+								return
+							}
+							persistentRunnerMap[svcName] = proc
+							logStatus("restarted service: %s", svcName)
+						}(filteredSvc, r)
+					}
+					continue
+				}
+
 				sigCount++
 
 				switch sigCount {
 				case 1:
-					// Check if we're in filtered view
-					filteredRestart = ui.CurrentFilter()
-					if filteredRestart != "" {
-						log.Printf("Restarting %s... (Ctrl+C again to exit, third time to force kill)", filteredRestart)
-						restartPending = true
-						restartServices[filteredRestart] = true
-						// Only signal the filtered service
-						if r, ok := persistentRunnerMap[filteredRestart]; ok {
-							_ = r.Signal(syscall.SIGINT)
-						}
-					} else {
-						log.Println("Restarting all... (Ctrl+C again to exit, third time to force kill)")
-						restartPending = true
-						for _, r := range runners {
-							_ = r.Signal(syscall.SIGINT)
-						}
+					logStatus("Restarting all... (Ctrl+C again to exit, third time to force kill)")
+					for _, r := range runners {
+						_ = r.Signal(syscall.SIGINT)
+					}
+					// Mark all for restart and break to main loop
+					for _, svc := range services {
+						restartServices[svc.service] = true
 					}
 				case 2:
-					log.Println("Will exit after processes stop... (Ctrl+C to force kill)")
-					restartPending = false
+					logStatus("Will exit after processes stop... (Ctrl+C to force kill)")
 					exitPending = true
 					for _, r := range runners {
 						_ = r.Signal(syscall.SIGINT)
 					}
 				default: // 3+
-					log.Println("Force killing processes...")
+					logStatus("Force killing processes...")
 					for _, r := range runners {
 						_ = r.Signal(syscall.SIGKILL)
 					}
@@ -628,7 +671,7 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 					return
 				}
 			case <-allDone:
-				log.Println("all processes exited")
+				logStatus("all processes exited")
 				break loop
 			}
 		}
@@ -636,16 +679,12 @@ func runMultiProcess(cmd *cobra.Command, args []string) {
 		procCancel()
 
 		// Decide what to do after process exits
-		if restartPending {
-			if filteredRestart != "" {
-				log.Printf("Restarting %s...", filteredRestart)
-			} else {
-				log.Println("Restarting all processes...")
-			}
+		if len(restartServices) > 0 {
+			logStatus("Restarting processes...")
 			continue // restart the loop
 		}
 		if exitPending {
-			log.Println("Exiting...")
+			logStatus("Exiting...")
 		}
 
 		// Normal exit or exit pending - shutdown gracefully

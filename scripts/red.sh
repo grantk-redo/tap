@@ -1,4 +1,6 @@
 #!/bin/bash
+trap 'exit 0' SIGINT SIGTERM
+
 RED='\033[0;31m'
 NC='\033[0m'
 
@@ -16,9 +18,19 @@ messages=(
 )
 
 i=0
+
+# Sprint: 60 logs quickly
+for j in {1..60}; do
+    ((i++))
+    msg=${messages[$RANDOM % ${#messages[@]}]}
+    echo -e "${RED}[$i] $msg${NC}"
+    sleep 0.016  # ~60 per second
+done
+
+# Then slow down
 while true; do
     ((i++))
     msg=${messages[$RANDOM % ${#messages[@]}]}
     echo -e "${RED}[$i] $msg${NC}"
-    sleep $(awk -v min=0.2 -v max=1.5 'BEGIN{srand(); print min+rand()*(max-min)}')
+    sleep $(awk -v min=0.5 -v max=2.0 'BEGIN{srand(); print min+rand()*(max-min)}')
 done

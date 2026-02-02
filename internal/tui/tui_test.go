@@ -35,13 +35,13 @@ func TestTUI_New(t *testing.T) {
 			}
 
 			// Initial filter should be 0 (all)
-			if ui.currentFilter != 0 {
-				t.Errorf("Initial filter should be 0, got %d", ui.currentFilter)
+			if ui.CurrentFilterIndex() != 0 {
+				t.Errorf("Initial filter should be 0, got %d", ui.CurrentFilterIndex())
 			}
 
-			// Log files map should be initialized
-			if ui.logFiles == nil {
-				t.Error("Log files map should be initialized")
+			// Log channel should be initialized
+			if ui.logChan == nil {
+				t.Error("Log channel should be initialized")
 			}
 		})
 	}
@@ -130,53 +130,6 @@ func TestTUI_SetFilter_InvalidBounds(t *testing.T) {
 	}
 }
 
-func TestTUI_HandleKey_FilterSelection(t *testing.T) {
-	services := []string{"api", "worker", "db"}
-	ui := New(services)
-
-	tests := []struct {
-		key      byte
-		expected int
-	}{
-		{'0', 0},
-		{'1', 1},
-		{'2', 2},
-		{'3', 3},
-		{'4', 3}, // no service 4, should stay at 3
-		{'9', 3}, // no service 9, should stay at 3
-		{'0', 0}, // back to all
-	}
-
-	for _, tt := range tests {
-		ui.handleKey(tt.key)
-		if got := ui.CurrentFilterIndex(); got != tt.expected {
-			t.Errorf("After handleKey(%q), CurrentFilterIndex() = %d, want %d", tt.key, got, tt.expected)
-		}
-	}
-}
-
-func TestTUI_HandleKey_CtrlC(t *testing.T) {
-	// Note: We can't test Ctrl+C handling directly because it sends SIGINT
-	// to the current process, which would kill the test.
-	t.Log("Ctrl+C handling tested manually - sends SIGINT to process")
-}
-
-func TestTUI_HandleKey_IgnoresOtherKeys(t *testing.T) {
-	services := []string{"api", "worker"}
-	ui := New(services)
-
-	ui.SetFilter(1)
-
-	// These keys should not change the filter
-	ignoredKeys := []byte{'a', 'z', ' ', '\n', '\t', 'A', 'Z'}
-	for _, key := range ignoredKeys {
-		ui.handleKey(key)
-		if got := ui.CurrentFilterIndex(); got != 1 {
-			t.Errorf("handleKey(%q) should not change filter, got %d", key, got)
-		}
-	}
-}
-
 func TestTUI_ServiceWriter(t *testing.T) {
 	services := []string{"api", "worker"}
 	ui := New(services)
@@ -224,84 +177,228 @@ func TestServiceWriter_Write(t *testing.T) {
 	}
 }
 
-func TestLogFile_WriteAndReadAll(t *testing.T) {
-	// Create a temp file
-	tmpFile, err := newLogFile(t.TempDir() + "/test.log")
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
-	defer tmpFile.Close()
+func TestModel_New(t *testing.T) {
+	services := []string{"api", "worker", "db"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
 
-	// Write some lines
-	lines := []string{"line 1", "line 2", "line 3", "line 4", "line 5"}
-	for _, line := range lines {
-		tmpFile.WriteLine(line)
+	if len(model.services) != len(services) {
+		t.Errorf("Expected %d services, got %d", len(services), len(model.services))
 	}
 
-	// Read all lines
-	result := tmpFile.ReadAllLines()
-	if len(result) != 5 {
-		t.Errorf("Expected 5 lines, got %d", len(result))
+	if model.currentFilter != 0 {
+		t.Errorf("Initial currentFilter = %d, want 0", model.currentFilter)
 	}
 
-	for i, line := range result {
-		if line != lines[i] {
-			t.Errorf("Line %d: got %q, want %q", i, line, lines[i])
+	if model.scrollOffset != 0 {
+		t.Errorf("Initial scrollOffset = %d, want 0", model.scrollOffset)
+	}
+
+	// Should have a buffer for each service plus allLogs
+	if len(model.logBuffers) != len(services) {
+		t.Errorf("Expected %d log buffers, got %d", len(services), len(model.logBuffers))
+	}
+
+	if model.allLogs == nil {
+		t.Error("allLogs buffer should be initialized")
+	}
+}
+
+func TestModel_AppendLog(t *testing.T) {
+	services := []string{"api", "worker"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+
+	model.appendLog(LogMsg{Service: "api", Text: "test message"})
+
+	// Check service buffer
+	if model.logBuffers["api"].Len() != 1 {
+		t.Errorf("api buffer len = %d, want 1", model.logBuffers["api"].Len())
+	}
+
+	// Check all logs buffer
+	if model.allLogs.Len() != 1 {
+		t.Errorf("allLogs len = %d, want 1", model.allLogs.Len())
+	}
+
+	// All logs should have prefix
+	lines := model.allLogs.Lines()
+	if !strings.Contains(lines[0], "[api]") {
+		t.Errorf("allLogs entry should contain service prefix, got %q", lines[0])
+	}
+}
+
+func TestModel_CurrentFilter(t *testing.T) {
+	services := []string{"api", "worker", "db"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+
+	if model.CurrentFilter() != 0 {
+		t.Errorf("Initial CurrentFilter() = %d, want 0", model.CurrentFilter())
+	}
+
+	model.currentFilter = 2
+	if model.CurrentFilter() != 2 {
+		t.Errorf("After setting currentFilter=2, CurrentFilter() = %d, want 2", model.CurrentFilter())
+	}
+}
+
+func TestModel_CurrentFilterService(t *testing.T) {
+	services := []string{"api", "worker", "db"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+
+	tests := []struct {
+		filter   int
+		expected string
+	}{
+		{0, ""},
+		{1, "api"},
+		{2, "worker"},
+		{3, "db"},
+		{4, ""}, // out of bounds
+	}
+
+	for _, tt := range tests {
+		model.currentFilter = tt.filter
+		if got := model.CurrentFilterService(); got != tt.expected {
+			t.Errorf("CurrentFilterService() with filter=%d = %q, want %q", tt.filter, got, tt.expected)
 		}
 	}
 }
 
-func TestLogFile_ReadAllLines_Empty(t *testing.T) {
-	tmpFile, err := newLogFile(t.TempDir() + "/test.log")
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
-	defer tmpFile.Close()
-
-	// Don't write anything
-	result := tmpFile.ReadAllLines()
-	if len(result) != 0 {
-		t.Errorf("Expected 0 lines from empty file, got %d", len(result))
-	}
-}
-
-func TestLogFile_LineCount(t *testing.T) {
-	tmpFile, err := newLogFile(t.TempDir() + "/test.log")
-	if err != nil {
-		t.Fatalf("Failed to create log file: %v", err)
-	}
-	defer tmpFile.Close()
-
-	if tmpFile.LineCount() != 0 {
-		t.Errorf("Expected 0 lines initially, got %d", tmpFile.LineCount())
-	}
-
-	tmpFile.WriteLine("line 1")
-	tmpFile.WriteLine("line 2")
-
-	if tmpFile.LineCount() != 2 {
-		t.Errorf("Expected 2 lines, got %d", tmpFile.LineCount())
-	}
-}
-
-func TestTUI_Integration_PrefixFormat(t *testing.T) {
+func TestModel_CurrentBuffer(t *testing.T) {
 	services := []string{"api", "worker"}
-	ui := New(services)
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
 
-	// Test that prefix only colors the service tag, not the message
-	prefix := ui.renderer.FormatServicePrefix("api", 0)
-	message := "ERROR: Something went wrong"
-	fullLine := prefix + message
-
-	// Reset should appear before the message
-	resetIdx := strings.Index(fullLine, Reset)
-	messageIdx := strings.Index(fullLine, message)
-
-	if resetIdx == -1 || messageIdx == -1 {
-		t.Fatal("Expected both Reset and message in output")
+	// Filter 0 should return allLogs
+	model.currentFilter = 0
+	if model.currentBuffer() != model.allLogs {
+		t.Error("currentBuffer() with filter=0 should return allLogs")
 	}
 
-	if resetIdx > messageIdx {
-		t.Error("Reset should appear before message to ensure message is not colored")
+	// Filter 1 should return api buffer
+	model.currentFilter = 1
+	if model.currentBuffer() != model.logBuffers["api"] {
+		t.Error("currentBuffer() with filter=1 should return api buffer")
+	}
+
+	// Filter 2 should return worker buffer
+	model.currentFilter = 2
+	if model.currentBuffer() != model.logBuffers["worker"] {
+		t.Error("currentBuffer() with filter=2 should return worker buffer")
+	}
+
+	// Out of bounds should return nil
+	model.currentFilter = 10
+	if model.currentBuffer() != nil {
+		t.Error("currentBuffer() with filter=10 should return nil")
+	}
+}
+
+func TestModel_Scroll(t *testing.T) {
+	services := []string{"api"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+	model.height = 10 // viewport of 6 lines (10 - 4 for header/separator/newline/help)
+
+	// Add some logs
+	for i := 0; i < 20; i++ {
+		model.appendLog(LogMsg{Service: "api", Text: "line"})
+	}
+
+	// Initially at bottom
+	if model.scrollOffset != 0 {
+		t.Errorf("Initial scrollOffset = %d, want 0", model.scrollOffset)
+	}
+
+	// Scroll up
+	model.scrollUp(5)
+	if model.scrollOffset != 5 {
+		t.Errorf("After scrollUp(5), scrollOffset = %d, want 5", model.scrollOffset)
+	}
+
+	// Scroll down
+	model.scrollDown(3)
+	if model.scrollOffset != 2 {
+		t.Errorf("After scrollDown(3), scrollOffset = %d, want 2", model.scrollOffset)
+	}
+
+	// Scroll down past bottom
+	model.scrollDown(10)
+	if model.scrollOffset != 0 {
+		t.Errorf("After scrollDown(10), scrollOffset = %d, want 0", model.scrollOffset)
+	}
+}
+
+func TestModel_ScrollMaxOffset(t *testing.T) {
+	services := []string{"api"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+	model.height = 10 // viewport of 6 lines (10 - 4 for header/separator/newline/help)
+
+	// Add 20 logs
+	for i := 0; i < 20; i++ {
+		model.appendLog(LogMsg{Service: "api", Text: "line"})
+	}
+
+	// Try to scroll way past top
+	model.scrollUp(100)
+
+	// Max offset should be 20 - 6 = 14
+	if model.scrollOffset != 14 {
+		t.Errorf("After scrollUp(100), scrollOffset = %d, want 14", model.scrollOffset)
+	}
+}
+
+func TestModel_View_NotReady(t *testing.T) {
+	services := []string{"api"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+
+	// Model not ready yet
+	view := model.View()
+	if !strings.Contains(view, "Initializing") {
+		t.Errorf("View() before ready should contain 'Initializing', got %q", view)
+	}
+}
+
+func TestModel_RenderHeader(t *testing.T) {
+	services := []string{"api", "worker"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+
+	header := model.renderHeader()
+
+	// Should contain All
+	if !strings.Contains(header, "[0] All") {
+		t.Error("Header should contain '[0] All'")
+	}
+
+	// Should contain services
+	if !strings.Contains(header, "[1] api") {
+		t.Error("Header should contain '[1] api'")
+	}
+	if !strings.Contains(header, "[2] worker") {
+		t.Error("Header should contain '[2] worker'")
+	}
+}
+
+func TestModel_FormatServicePrefix(t *testing.T) {
+	services := []string{"api", "worker"}
+	logChan := make(chan LogMsg, 10)
+	model := NewModel(services, logChan, nil)
+
+	prefix := model.formatServicePrefix("api", 0)
+
+	// Should contain service name in brackets
+	if !strings.Contains(prefix, "[api]") {
+		t.Errorf("Prefix should contain '[api]', got %q", prefix)
+	}
+
+	// Should end with a space for separation
+	if !strings.HasSuffix(prefix, " ") {
+		t.Errorf("Prefix should end with space, got %q", prefix)
 	}
 }
