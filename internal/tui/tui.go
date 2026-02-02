@@ -67,7 +67,7 @@ func (t *TUI) Start(ctx context.Context) error {
 	t.program = tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(), // Enable mouse for clicks and scroll
+		tea.WithMouseCellMotion(), // Enable mouse for tab clicks and scroll
 		tea.WithoutSignalHandler(), // We handle signals ourselves in main.go
 	)
 
