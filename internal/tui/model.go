@@ -472,7 +472,7 @@ func (m Model) renderHelpBar() string {
 		status = ""
 	}
 
-	help := helpStyle.Render("click tabs • 0-9:filter • j/k:scroll • g/G:top/bottom • Ctrl+C:restart")
+	help := helpStyle.Render("0-9:filter • j/k:scroll • g/G:top/bottom • Shift+drag:copy • Ctrl+C:restart")
 
 	// Right-align status, left-align help
 	if status != "" {
